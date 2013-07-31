@@ -95,7 +95,7 @@ func serverStatusOracle(masterRequestChannel <-chan serverRequest, replicaReques
 			if masterServer != nil {
 				master = *masterServer
 			}
-			log.Printf("statusUpdate: %v, master='%v', %v replicas are up", statusUpdate, master, replicaServers.Len())
+			log.Printf("statusUpdate: master='%v', %v replicas are up", master, replicaServers.Len())
 		}
 	}
 }
@@ -274,7 +274,7 @@ func handleConnection(conn net.Conn, masterRequestChannel, replicaRequestChannel
 	}
 
 	newStartupMessageExcludingSize := &bytes.Buffer{}
-	//newStartupMessageExcludingSize.Grow(startupMessageSize)
+	newStartupMessageExcludingSize.Grow(int(startupMessageSize))
 	binary.Write(newStartupMessageExcludingSize, binary.BigEndian, protocolVersionNumber)
 
 	startupMessage = startupMessage[4:]
