@@ -9,6 +9,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
+	"path"
+	"strings"
 	"time"
 )
 
@@ -17,7 +20,8 @@ type serverRequest struct {
 }
 
 const (
-	StatusDown = iota
+	StatusUnknown = iota
+	StatusDown
 	StatusBroken
 	StatusMaster
 	StatusReplica
@@ -103,35 +107,38 @@ func serverStatusOracle(masterRequestChannel <-chan serverRequest, replicaReques
 			if masterServer != nil {
 				master = *masterServer
 			}
-			log.Printf("statusUpdate: %v, master='%v', replicas='%v'", statusUpdate, master, replicaServers)
+			log.Printf("statusUpdate: %v, master='%v', %v replicas are up", statusUpdate, master, replicaServers.Len())
 		}
 	}
 }
 
 func monitorBackend(backend string, serverStatusUpdateChannel chan<- serverStatusUpdate) {
 	first := true
+	status := StatusUnknown
 
 	for {
 		if !first {
-			time.Sleep(time.Minute)
+			time.Sleep(time.Second * 5)
 		}
 		first = false
 
-		log.Printf("%v Testing connection", backend)
-
 		db, err := sql.Open("postgres", "user=postgres dbname=postgres password=password sslmode=disable "+backend)
 		if err != nil {
-			serverStatusUpdateChannel <- serverStatusUpdate{StatusDown, backend} // I'm  DOWN!
-			log.Printf("%v Connection open failed: %v", backend, err)
+			if status != StatusDown {
+				status = StatusDown
+				serverStatusUpdateChannel <- serverStatusUpdate{StatusDown, backend} // I'm  DOWN!
+				log.Printf("%v Connection open failed: %v", backend, err)
+			}
 			continue
 		}
 
-		log.Printf("%v Connection open", backend)
-
 		rows, err := db.Query("SELECT pg_is_in_recovery()")
 		if err != nil {
-			serverStatusUpdateChannel <- serverStatusUpdate{StatusDown, backend} // I'm DOWN!
-			log.Printf("%v Query failed: %v", backend, err)
+			if status != StatusDown {
+				status = StatusDown
+				serverStatusUpdateChannel <- serverStatusUpdate{StatusDown, backend} // I'm  DOWN!
+				log.Printf("%v Query failed: %v", backend, err)
+			}
 			continue
 		}
 
@@ -139,24 +146,36 @@ func monitorBackend(backend string, serverStatusUpdateChannel chan<- serverStatu
 		for rows.Next() {
 			err = rows.Scan(&inRecovery)
 			if err != nil {
-				serverStatusUpdateChannel <- serverStatusUpdate{StatusBroken, backend} // I'm BROKEN?
-				log.Printf("%v .Scan() failed: %v", backend, err)
+				if status != StatusBroken {
+					status = StatusBroken
+					serverStatusUpdateChannel <- serverStatusUpdate{StatusBroken, backend} // I'm  DOWN!
+					log.Printf("%v .Scan() failed: %v", backend, err)
+				}
 				continue
 			}
 		}
 		err = rows.Err()
 		if err != nil {
-			serverStatusUpdateChannel <- serverStatusUpdate{StatusBroken, backend} // I'm BROKEN?
-			log.Printf("%v Query rows failed: %v", backend, err)
+			if status != StatusBroken {
+				status = StatusBroken
+				serverStatusUpdateChannel <- serverStatusUpdate{StatusBroken, backend} // I'm  DOWN!
+				log.Printf("%v Query rows failed: %v", backend, err)
+			}
 			continue
 		}
 
 		if inRecovery {
-			serverStatusUpdateChannel <- serverStatusUpdate{StatusReplica, backend} // I'm a replica
-			log.Printf("%v I'm a replica!", backend)
+			if status != StatusReplica {
+				status = StatusReplica
+				serverStatusUpdateChannel <- serverStatusUpdate{StatusReplica, backend} // I'm a replica!
+				log.Printf("%v I'm a replica!", backend)
+			}
 		} else {
-			serverStatusUpdateChannel <- serverStatusUpdate{StatusMaster, backend} // I'm a master
-			log.Printf("%v I'm a master", backend)
+			if status != StatusMaster {
+				status = StatusMaster
+				serverStatusUpdateChannel <- serverStatusUpdate{StatusMaster, backend} // I'm the master!
+				log.Printf("%v I'm a master", backend)
+			}
 		}
 	}
 }
@@ -168,7 +187,15 @@ func main() {
 	serverStatusUpdateChannel := make(chan serverStatusUpdate)
 	go serverStatusOracle(masterRequestChannel, replicaRequestChannel, serverStatusUpdateChannel)
 
-	backends := []string{"host=127.0.0.1 port=5432", "host=127.0.0.1 port=5433"}
+	backends := []string{
+		"host=127.0.0.1 port=5432",
+		"host=127.0.0.1 port=5433",
+		"host=127.0.0.1 port=5434",
+		"host=127.0.0.1 port=5435",
+		"host=127.0.0.1 port=5436",
+		"host=127.0.0.1 port=5437",
+		"host=127.0.0.1 port=5438",
+	}
 	for _, backend := range backends {
 		go monitorBackend(backend, serverStatusUpdateChannel)
 	}
@@ -182,11 +209,11 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		go handleConnection(conn)
+		go handleConnection(conn, masterRequestChannel, replicaRequestChannel)
 	}
 }
 
-func handleConnection(conn net.Conn) {
+func handleConnection(conn net.Conn, masterRequestChannel, replicaRequestChannel chan<- serverRequest) {
 
 	defer conn.Close()
 
@@ -297,8 +324,11 @@ func handleConnection(conn net.Conn) {
 		}
 	}
 
-	if dbName == "tng1_asp_replica" {
-		startupParameters["database"] = "tng1_asp"
+	wantReplica := false
+
+	if strings.HasSuffix(dbName, "_replica") {
+		wantReplica = true
+		startupParameters["database"] = dbName[:len(dbName)-8]
 		log.Printf("Rewriting database name from %v to %v", dbName, startupParameters["database"])
 	}
 
@@ -314,7 +344,23 @@ func handleConnection(conn net.Conn) {
 	// Reset read deadline to no timeout
 	conn.SetReadDeadline(time.Time{})
 
-	upstream, err := net.Dial("tcp", "127.0.0.1:5432")
+	responseChannel := make(chan *string)
+	request := serverRequest{responseChannel}
+	if wantReplica {
+		replicaRequestChannel <- request
+	} else {
+		masterRequestChannel <- request
+	}
+	backend := <-responseChannel
+
+	if backend == nil {
+		// FIXME: it'd be nice to return an error message to the client for some of these failures...
+		log.Println("Unable to find satisfactory backend server")
+		return
+	}
+
+	log.Printf("backend to connect to: %v", *backend)
+	upstream, err := net.Dial(network(*backend))
 	if err != nil {
 		log.Print(err)
 		return
@@ -344,6 +390,145 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
-	// FIXME: this is probably unreachable?
-	log.Printf("Terminating connection")
+	log.Printf("Connection closed softly")
 }
+
+//// BEGIN: Copy/hacked from lib/pq
+func network(name string) (string, string) {
+	o := make(Values)
+
+	// A number of defaults are applied here, in this order:
+	//
+	// * Very low precedence defaults applied in every situation
+	// * Environment variables
+	// * Explicitly passed connection information
+	o.Set("host", "localhost")
+	o.Set("port", "5432")
+
+	for k, v := range parseEnviron(os.Environ()) {
+		o.Set(k, v)
+	}
+
+	parseOpts(name, o)
+
+	// Don't care about user, just host & port
+	//// If a user is not provided by any other means, the last
+	//// resort is to use the current operating system provided user
+	//// name.
+	//if o.Get("user") == "" {
+	//	u, err := userCurrent()
+	//	if err != nil {
+	//		return nil, err
+	//	} else {
+	//		o.Set("user", u)
+	//	}
+	//}
+
+	host := o.Get("host")
+
+	if strings.HasPrefix(host, "/") {
+		sockPath := path.Join(host, ".s.PGSQL."+o.Get("port"))
+		return "unix", sockPath
+	}
+
+	return "tcp", host + ":" + o.Get("port")
+}
+
+type Values map[string]string
+
+func (vs Values) Set(k, v string) {
+	vs[k] = v
+}
+
+func (vs Values) Get(k string) (v string) {
+	return vs[k]
+}
+
+func parseOpts(name string, o Values) {
+	if len(name) == 0 {
+		return
+	}
+
+	name = strings.TrimSpace(name)
+
+	ps := strings.Split(name, " ")
+	for _, p := range ps {
+		kv := strings.Split(p, "=")
+		if len(kv) < 2 {
+			log.Fatalf("invalid option: %q", p)
+		}
+		o.Set(kv[0], kv[1])
+	}
+}
+
+// parseEnviron tries to mimic some of libpq's environment handling
+//
+// To ease testing, it does not directly reference os.Environ, but is
+// designed to accept its output.
+//
+// Environment-set connection information is intended to have a higher
+// precedence than a library default but lower than any explicitly
+// passed information (such as in the URL or connection string).
+func parseEnviron(env []string) (out map[string]string) {
+	out = make(map[string]string)
+
+	for _, v := range env {
+		parts := strings.SplitN(v, "=", 2)
+
+		accrue := func(keyname string) {
+			out[keyname] = parts[1]
+		}
+
+		// The order of these is the same as is seen in the
+		// PostgreSQL 9.1 manual, with omissions briefly
+		// noted.
+		switch parts[0] {
+		case "PGHOST":
+			accrue("host")
+		case "PGHOSTADDR":
+			accrue("hostaddr")
+		case "PGPORT":
+			accrue("port")
+		case "PGDATABASE":
+			accrue("dbname")
+		case "PGUSER":
+			accrue("user")
+		case "PGPASSWORD":
+			accrue("password")
+		// skip PGPASSFILE, PGSERVICE, PGSERVICEFILE,
+		// PGREALM
+		case "PGOPTIONS":
+			accrue("options")
+		case "PGAPPNAME":
+			accrue("application_name")
+		case "PGSSLMODE":
+			accrue("sslmode")
+		case "PGREQUIRESSL":
+			accrue("requiressl")
+		case "PGSSLCERT":
+			accrue("sslcert")
+		case "PGSSLKEY":
+			accrue("sslkey")
+		case "PGSSLROOTCERT":
+			accrue("sslrootcert")
+		case "PGSSLCRL":
+			accrue("sslcrl")
+		case "PGREQUIREPEER":
+			accrue("requirepeer")
+		case "PGKRBSRVNAME":
+			accrue("krbsrvname")
+		case "PGGSSLIB":
+			accrue("gsslib")
+		case "PGCONNECT_TIMEOUT":
+			accrue("connect_timeout")
+		case "PGCLIENTENCODING":
+			accrue("client_encoding")
+			// skip PGDATESTYLE, PGTZ, PGGEQO, PGSYSCONFDIR,
+			// PGLOCALEDIR
+		}
+	}
+
+	return out
+}
+
+//// END: Copy/hacked from lib/pq
