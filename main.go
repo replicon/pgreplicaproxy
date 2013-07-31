@@ -38,26 +38,14 @@ func addToRing(r *ring.Ring, s string) *ring.Ring {
 	return n.Link(r)
 }
 
-func removeFromRing(ring *ring.Ring, s string) *ring.Ring {
-	if ring.Len() == 0 {
-		return ring
-	}
-	var start = ring
-	var current = ring
-	for {
-		if current.Value == s {
-			if current.Len() == 1 {
-				return nil
-			} else {
-				current.Move(-1).Unlink(1)
-			}
+func removeFromRing(r *ring.Ring, s string) *ring.Ring {
+	newRing := ring.New(0)
+	r.Do(func(v interface{}) {
+		if v != s {
+			newRing = addToRing(newRing, v.(string))
 		}
-		current = current.Next()
-		if current == start {
-			break
-		}
-	}
-	return ring
+	})
+	return newRing
 }
 
 func serverStatusOracle(masterRequestChannel <-chan serverRequest, replicaRequestChannel <-chan serverRequest, serverStatusUpdateChannel <-chan serverStatusUpdate) {
