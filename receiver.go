@@ -20,6 +20,32 @@ var incorrectlyFormattedPacket = errors.New("Incorrectly formatted protocol pack
 
 type startupMessage map[string]string
 
+func sendError(conn net.Conn, errorMessage string) {
+	errorMessageExcludingSize := &bytes.Buffer{}
+	errorMessageExcludingSize.Grow(1024)
+
+	errorMessageExcludingSize.Write([]byte("S"))
+	errorMessageExcludingSize.Write([]byte("ERROR"))
+	errorMessageExcludingSize.Write([]byte{0})
+
+	errorMessageExcludingSize.Write([]byte("C"))
+	errorMessageExcludingSize.Write([]byte("08000")) // connection exception
+	errorMessageExcludingSize.Write([]byte{0})
+
+	errorMessageExcludingSize.Write([]byte("M"))
+	errorMessageExcludingSize.Write([]byte(errorMessage))
+	errorMessageExcludingSize.Write([]byte{0})
+
+	// Terminating ErrorResponse byte
+	errorMessageExcludingSize.Write([]byte{0})
+
+	// Send the error message on the connection.  No error handling here; the connection
+	// isn't likely to live for long now anyways. :-)
+	conn.Write([]byte{'E'})
+	binary.Write(conn, binary.BigEndian, int32(errorMessageExcludingSize.Len()+4))
+	conn.Write(errorMessageExcludingSize.Bytes())
+}
+
 func readStartupMessage(conn net.Conn) (*startupMessage, error) {
 	return readStartupMessageInternal(conn, true)
 }
@@ -32,6 +58,7 @@ func readStartupMessageInternal(conn net.Conn, allowRecursion bool) (*startupMes
 	}
 
 	if startupMessageSize < 0 || startupMessageSize > 8096 {
+		sendError(conn, "Startup packet size invalid")
 		return nil, startupPacketSizeInvalid
 	}
 
@@ -40,6 +67,7 @@ func readStartupMessageInternal(conn net.Conn, allowRecursion bool) (*startupMes
 	startupMessageData := make([]byte, startupMessageSize-4)
 	_, err = io.ReadFull(conn, startupMessageData)
 	if err != nil {
+		sendError(conn, "Socket read error")
 		return nil, err
 	}
 
@@ -49,6 +77,7 @@ func readStartupMessageInternal(conn net.Conn, allowRecursion bool) (*startupMes
 	buf := bytes.NewBuffer(startupMessageData)
 	err = binary.Read(buf, binary.BigEndian, &protocolVersionNumber)
 	if err != nil {
+		sendError(conn, "Socket read error")
 		return nil, err
 	}
 
@@ -56,7 +85,11 @@ func readStartupMessageInternal(conn net.Conn, allowRecursion bool) (*startupMes
 		log.Printf("SSLRequest received; returning N")
 		conn.Write([]byte{'N'})
 		return readStartupMessageInternal(conn, false)
+	} else if protocolVersionNumber == 80877102 {
+		log.Printf("CancelRequest packet received; not supported yet!")
+		return nil, unsupportedProtocolVersion
 	} else if protocolVersionNumber != 196608 {
+		sendError(conn, "Unsupported protocol version")
 		return nil, unsupportedProtocolVersion
 	}
 
@@ -65,6 +98,7 @@ func readStartupMessageInternal(conn net.Conn, allowRecursion bool) (*startupMes
 	for {
 		nextZero := bytes.IndexByte(startupMessageData, 0)
 		if nextZero == -1 {
+			sendError(conn, "Malformed startup packet")
 			return nil, incorrectlyFormattedPacket
 		} else if nextZero == 0 {
 			break
@@ -75,6 +109,7 @@ func readStartupMessageInternal(conn net.Conn, allowRecursion bool) (*startupMes
 
 		nextZero = bytes.IndexByte(startupMessageData, 0)
 		if nextZero == -1 {
+			sendError(conn, "Malformed startup packet")
 			return nil, incorrectlyFormattedPacket
 		}
 		value := string(startupMessageData[:nextZero])
@@ -109,6 +144,7 @@ func handleIncomingConnection(conn net.Conn, masterRequestChannel, replicaReques
 	if !ok {
 		dbName, ok = startupParameters["user"]
 		if !ok {
+			sendError(conn, "Missing database or user parameter")
 			log.Printf("Expected database or user parameter, neither found")
 			return
 		}
@@ -129,15 +165,16 @@ func handleIncomingConnection(conn net.Conn, masterRequestChannel, replicaReques
 	}
 	backend := <-responseChannel
 	if backend == nil {
-		// FIXME: it'd be nice to return an error message to the client for some of these failures...
+		sendError(conn, "Unable to find satisfactory backend server")
 		log.Println("Unable to find satisfactory backend server")
 		return
 	}
 
 	// Create the new startup message w/ the possibly different startupParameters
+	var protocolVersion int32 = 196608
 	newStartupMessageExcludingSize := &bytes.Buffer{}
 	newStartupMessageExcludingSize.Grow(1024)
-	binary.Write(newStartupMessageExcludingSize, binary.BigEndian, 196608)
+	binary.Write(newStartupMessageExcludingSize, binary.BigEndian, protocolVersion)
 	for key, value := range startupParameters {
 		newStartupMessageExcludingSize.Write([]byte(key))
 		newStartupMessageExcludingSize.Write([]byte{0})
@@ -151,16 +188,19 @@ func handleIncomingConnection(conn net.Conn, masterRequestChannel, replicaReques
 	log.Printf("backend to connect to: %v", *backend)
 	upstream, err := net.Dial(network(*backend))
 	if err != nil {
+		sendError(conn, "Unable to connect to backend server")
 		log.Print(err)
 		return
 	}
 	err = binary.Write(upstream, binary.BigEndian, int32(newStartupMessageExcludingSize.Len()+4))
 	if err != nil {
+		sendError(conn, "Backend network error")
 		log.Print(err)
 		return
 	}
 	_, err = upstream.Write(newStartupMessageExcludingSize.Bytes())
 	if err != nil {
+		sendError(conn, "Backend network error")
 		log.Print(err)
 		return
 	}
