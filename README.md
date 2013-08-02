@@ -19,3 +19,15 @@ useful today:
 * When a backend server changes state (master -> replica, replica -> master,
   etc.) it should close the current network connections to that server so that
   they're not mistakenly running against the wrong server type. (issue #3)
+
+Installing
+----------
+
+1. Install Go 1.1 for your OS (http://golang.org/doc/install).
+
+2. Set your GOPATH environment variable.  If you're not familiar with Go, this
+   is the root of where you'd like to store projects and compiled binaries.
+
+3. Execute `go get github.com/mfenniak/pgreplicaproxy`.
+
+4. A compiled `pgreplicaproxy` binary should now be in $GOPATH/bin.
