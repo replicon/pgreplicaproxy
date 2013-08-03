@@ -221,7 +221,6 @@ func handleIncomingConnection(conn net.Conn, masterRequestChannel, replicaReques
 	// Proxy upstream -> conn, but attempting to extract the BackendKeyData packet
 	_, err = proxyPacketsUntilBackendKeyDataReceived(conn, upstream)
 	if err != nil {
-		log.Printf("XXX %v", err)
 		sendError(conn, err.Error())
 		log.Print(err)
 		return
