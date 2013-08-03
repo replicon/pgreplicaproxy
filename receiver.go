@@ -1,10 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
-	_ "github.com/lib/pq"
 	"io"
 	"log"
 	"net"
@@ -12,6 +12,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 var startupPacketSizeInvalid = errors.New("Terminating connection that provided an abnormally sized startup message packet")
@@ -19,6 +21,11 @@ var unsupportedProtocolVersion = errors.New("Unexpected protocol version number;
 var incorrectlyFormattedPacket = errors.New("Incorrectly formatted protocol packet")
 
 type startupMessage map[string]string
+
+type backendKeyData struct {
+	processId int32
+	secretKey int32
+}
 
 func sendError(conn net.Conn, errorMessage string) {
 	errorMessageExcludingSize := &bytes.Buffer{}
@@ -205,20 +212,107 @@ func handleIncomingConnection(conn net.Conn, masterRequestChannel, replicaReques
 		return
 	}
 
-	// Stream data between the two network connections
-	log.Printf("Beginning dual Copy invocations")
+	// Begin copying all input from the client to the upstream connection.
 	go func() {
-		numCopied, err := io.Copy(upstream, conn)
-		log.Printf("Copy(upstream, conn) -> %v, %v", numCopied, err)
+		numCopied, err := io.Copy(conn, upstream)
+		log.Printf("Copy(conn, upstream) -> %v, %v", numCopied, err)
 	}()
-	numCopied, err := io.Copy(conn, upstream)
-	log.Printf("Copy(conn, upstream) -> %v, %v", numCopied, err)
+
+	// Proxy upstream -> conn, but attempting to extract the BackendKeyData packet
+	_, err = proxyPacketsUntilBackendKeyDataReceived(conn, upstream)
+	if err != nil {
+		log.Printf("XXX %v", err)
+		sendError(conn, err.Error())
+		log.Print(err)
+		return
+	}
+
+	// Stream data between the two network connections
+	// Also begin copying all input from the upstream connection to the client.
+	numCopied, err := io.Copy(upstream, conn)
+	log.Printf("Copy(upstream, conn) -> %v, %v", numCopied, err)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
 	log.Printf("Connection closed softly")
+}
+
+// Proxy backend -> client, but attempting to extract the BackendKeyData packet
+func proxyPacketsUntilBackendKeyDataReceived(client, backend net.Conn) (*backendKeyData, error) {
+
+	typeBuffer := make([]byte, 1)
+	bufferedClient := bufio.NewWriter(client)
+	var messageSize int32
+
+	for {
+		_, err := io.ReadFull(backend, typeBuffer)
+		if err != nil {
+			return nil, err
+		}
+		_, err = bufferedClient.Write(typeBuffer)
+		if err != nil {
+			return nil, err
+		}
+
+		err = binary.Read(backend, binary.BigEndian, &messageSize)
+		if err != nil {
+			return nil, err
+		} else if messageSize < 0 || messageSize > 8096 {
+			return nil, startupPacketSizeInvalid
+		}
+		err = binary.Write(bufferedClient, binary.BigEndian, &messageSize)
+		if err != nil {
+			return nil, err
+		}
+
+		// BackendKeyData message
+		if typeBuffer[0] == 'K' {
+			retval := backendKeyData{}
+			err = binary.Read(backend, binary.BigEndian, &retval.processId)
+			if err != nil {
+				return nil, err
+			}
+			err = binary.Read(backend, binary.BigEndian, &retval.secretKey)
+			if err != nil {
+				return nil, err
+			}
+
+			err = binary.Write(bufferedClient, binary.BigEndian, &retval.processId)
+			if err != nil {
+				return nil, err
+			}
+			err = binary.Write(bufferedClient, binary.BigEndian, &retval.secretKey)
+			if err != nil {
+				return nil, err
+			}
+
+			log.Printf("backendKeyData %v %v", retval.processId, retval.secretKey)
+
+			err = bufferedClient.Flush()
+			if err != nil {
+				return nil, err
+			}
+
+			return &retval, nil
+		} else {
+			messageBuffer := make([]byte, messageSize-4) // size includes the Int32 containing the size
+			_, err = io.ReadFull(backend, messageBuffer)
+			if err != nil {
+				return nil, err
+			}
+			_, err = bufferedClient.Write(messageBuffer)
+			if err != nil {
+				return nil, err
+			}
+
+			err = bufferedClient.Flush()
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 }
 
 //// BEGIN: Copy/hacked from lib/pq
