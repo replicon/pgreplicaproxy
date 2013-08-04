@@ -28,7 +28,7 @@ type serverStatusUpdate struct {
 
 // Maintains the status of backend severs, and allows a client to request a
 // replica or master connection.
-func serverStatusOracle(masterRequestChannel <-chan serverRequest, replicaRequestChannel <-chan serverRequest, serverStatusUpdateChannel <-chan serverStatusUpdate) {
+func serverStatusOracle() {
 	var masterServer *string
 	var replicaServers = ring.New(0)
 
@@ -82,7 +82,7 @@ func serverStatusOracle(masterRequestChannel <-chan serverRequest, replicaReques
 
 // Monitors a single Postgres server and reports changes in status to the
 // serverStatusUpdateChannel provided.
-func monitorBackend(backend string, serverStatusUpdateChannel chan<- serverStatusUpdate) {
+func monitorBackend(backend string) {
 	first := true
 	status := StatusUnknown
 
