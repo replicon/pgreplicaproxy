@@ -22,11 +22,6 @@ var incorrectlyFormattedPacket = errors.New("Incorrectly formatted protocol pack
 
 type startupMessage map[string]string
 
-type backendKeyData struct {
-	processId int32
-	secretKey int32
-}
-
 func sendError(conn net.Conn, errorMessage string) {
 	errorMessageExcludingSize := &bytes.Buffer{}
 	errorMessageExcludingSize.Grow(1024)
@@ -93,8 +88,36 @@ func readStartupMessageInternal(conn net.Conn, allowRecursion bool) (*startupMes
 		conn.Write([]byte{'N'})
 		return readStartupMessageInternal(conn, false)
 	} else if protocolVersionNumber == 80877102 {
-		log.Printf("CancelRequest packet received; not supported yet!")
-		return nil, unsupportedProtocolVersion
+		// CancelRequest message; if possible, match the processId and
+		// secretKey to an existing connection and proxy the cancel to
+		// the correct backend.
+
+		key := backendKeyDataMessage{}
+		err = binary.Read(buf, binary.BigEndian, &key.processId)
+		if err != nil {
+			return nil, err
+		}
+		err = binary.Read(buf, binary.BigEndian, &key.secretKey)
+		if err != nil {
+			return nil, err
+		}
+
+		log.Printf("Received CancelRequest, pid=%v, secret=%v", key.processId, key.secretKey)
+
+		backend := getBackendForBackendKeyData(key)
+		if backend != nil {
+			log.Printf("CancelRequest will be proxied to matching backend, %v", *backend)
+			backendConn, err := net.Dial(network(*backend))
+			if err == nil {
+				binary.Write(backendConn, binary.BigEndian, &startupMessageSize)
+				binary.Write(backendConn, binary.BigEndian, &protocolVersionNumber)
+				binary.Write(backendConn, binary.BigEndian, &key.processId)
+				binary.Write(backendConn, binary.BigEndian, &key.secretKey)
+				backendConn.Close()
+			}
+		}
+
+		return nil, nil
 	} else if protocolVersionNumber != 196608 {
 		sendError(conn, "Unsupported protocol version")
 		return nil, unsupportedProtocolVersion
@@ -138,6 +161,9 @@ func handleIncomingConnection(conn net.Conn, masterRequestChannel, replicaReques
 	startupMessage, err := readStartupMessage(conn)
 	if err != nil {
 		log.Print(err)
+		return
+	} else if startupMessage == nil {
+		// Occurs in a CancelRequest connection
 		return
 	}
 	startupParameters := *startupMessage
@@ -219,12 +245,15 @@ func handleIncomingConnection(conn net.Conn, masterRequestChannel, replicaReques
 	}()
 
 	// Proxy upstream -> conn, but attempting to extract the BackendKeyData packet
-	_, err = proxyPacketsUntilBackendKeyDataReceived(conn, upstream)
+	backendKeyData, err := proxyPacketsUntilBackendKeyDataReceived(conn, upstream)
 	if err != nil {
 		sendError(conn, err.Error())
 		log.Print(err)
 		return
 	}
+
+	registerBackendKey(*backendKeyData, *backend)
+	defer deregisterBackedKey(*backendKeyData)
 
 	// Stream data between the two network connections
 	// Also begin copying all input from the upstream connection to the client.
@@ -239,7 +268,7 @@ func handleIncomingConnection(conn net.Conn, masterRequestChannel, replicaReques
 }
 
 // Proxy backend -> client, but attempting to extract the BackendKeyData packet
-func proxyPacketsUntilBackendKeyDataReceived(client, backend net.Conn) (*backendKeyData, error) {
+func proxyPacketsUntilBackendKeyDataReceived(client, backend net.Conn) (*backendKeyDataMessage, error) {
 
 	typeBuffer := make([]byte, 1)
 	bufferedClient := bufio.NewWriter(client)
@@ -268,7 +297,7 @@ func proxyPacketsUntilBackendKeyDataReceived(client, backend net.Conn) (*backend
 
 		// BackendKeyData message
 		if typeBuffer[0] == 'K' {
-			retval := backendKeyData{}
+			retval := backendKeyDataMessage{}
 			err = binary.Read(backend, binary.BigEndian, &retval.processId)
 			if err != nil {
 				return nil, err

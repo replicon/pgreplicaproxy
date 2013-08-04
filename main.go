@@ -11,6 +11,7 @@ func main() {
 	serverStatusUpdateChannel := make(chan serverStatusUpdate)
 
 	go serverStatusOracle(masterRequestChannel, replicaRequestChannel, serverStatusUpdateChannel)
+	go manageBackendKeyDataStorage()
 
 	backends := []string{
 		"host=127.0.0.1 port=5432 user=postgres dbname=postgres password=password sslmode=disable",
