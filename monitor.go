@@ -3,9 +3,10 @@ package main
 import (
 	"container/ring"
 	"database/sql"
-	_ "github.com/lib/pq"
 	"log"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 type serverRequest struct {

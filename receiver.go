@@ -12,8 +12,6 @@ import (
 	"path"
 	"strings"
 	"time"
-
-	_ "github.com/lib/pq"
 )
 
 var startupPacketSizeInvalid = errors.New("Terminating connection that provided an abnormally sized startup message packet")
