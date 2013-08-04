@@ -14,7 +14,6 @@ server.
 There are a few major issues that prevent pgreplicaproxy from being generally
 useful today:
 
-* It needs to use a configuration file; those are pretty handy. (issue #1)
 * When a backend server changes state (master -> replica, replica -> master,
   etc.) it should close the current network connections to that server so that
   they're not mistakenly running against the wrong server type. (issue #3)
