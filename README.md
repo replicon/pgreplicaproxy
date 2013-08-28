@@ -9,7 +9,8 @@ servers to determine whether they are available, and whether they are a master
 or a replica.  It then receives client database connections, and based upon
 the database name that the client attempts to connect to, pgreplicaproxy will
 proxy the connection to the online master server or an online read-replica
-server.
+server.  If the database name ends in `_replica`, then a replica
+connection will be used, and the `_replica` suffix will be removed.
 
 There are a few major issues that prevent pgreplicaproxy from being generally
 useful today:
@@ -17,6 +18,8 @@ useful today:
 * When a backend server changes state (master -> replica, replica -> master,
   etc.) it should close the current network connections to that server so that
   they're not mistakenly running against the wrong server type. (issue #3)
+
+* Lack of testing under high load and concurrency situations.
 
 Installing
 ----------
