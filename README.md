@@ -26,6 +26,6 @@ Installing
 2. Set your GOPATH environment variable.  If you're not familiar with Go, this
    is the root of where you'd like to store projects and compiled binaries.
 
-3. Execute `go get github.com/mfenniak/pgreplicaproxy`.
+3. Execute `go get github.com/replicon/pgreplicaproxy`.
 
 4. A compiled `pgreplicaproxy` binary should now be in $GOPATH/bin.
