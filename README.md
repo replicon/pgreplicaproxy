@@ -32,3 +32,19 @@ Installing
 3. Execute `go get github.com/replicon/pgreplicaproxy`.
 
 4. A compiled `pgreplicaproxy` binary should now be in $GOPATH/bin.
+
+
+Using
+-----
+
+1. Copy example.cfg into pgreplicaproxy.cfg, and edit it as desired.
+
+2. Run pgreplicaproxy in the same directory as pgreplicaproxy.cfg.
+
+3. Connect to the host/port provided on the "listen" line of the config file,
+   with the appropriate username, password, and database name to use one of
+   the `backend` connections from the .cfg file.
+
+4. Try connecting again, and append `_replica` to the database name to
+   connect to a replica instead (if one is up and available).
+
