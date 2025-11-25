@@ -27,6 +27,7 @@ jobs:
                 checkmarx_password: ${{ secrets.CHECKMARX_PASSWORD }}
                 checkmarx_client_secret: ${{ secrets.CHECKMARX_CLIENT_SECRET }}
                 team: "/CxServer/Security/Deltek/Replicon"
+                preset: "ASA Premium"
                 # Project configuration
                 project: Replicon-${{ github.event.repository.name }}
                 scanners: sast
@@ -64,6 +65,7 @@ jobs:
                 checkmarx_password: ${{ secrets.CHECKMARX_PASSWORD }}
                 checkmarx_client_secret: ${{ secrets.CHECKMARX_CLIENT_SECRET }}
                 team: "/CxServer/Security/Deltek/Replicon"
+                preset: "ASA Premium"
                 # Project configuration
                 project: Replicon-${{ github.event.repository.name }}
                 scanners: sast
