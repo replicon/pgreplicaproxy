@@ -12,6 +12,9 @@ jobs:
   checkmarx-scan:
         name: Checkmarx SAST Scan
         runs-on: ubuntu-latest
+        concurrency:
+            group: checkmarx-${{ github.head_ref || github.ref }}
+            cancel-in-progress: true
         timeout-minutes: 90
         if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
 
@@ -51,6 +54,9 @@ jobs:
   checkmarx-scheduled-scan:
         name: Checkmarx scheduled SAST Scan
         runs-on: ubuntu-latest
+        concurrency:
+            group: checkmarx-scheduled-scan
+            cancel-in-progress: true
         timeout-minutes: 360
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 
