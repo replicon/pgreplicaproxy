@@ -9,88 +9,14 @@ on:
   workflow_dispatch:
 name: Checkmarx SAST Scan
 jobs:
-  checkmarx-scan:
-        name: Checkmarx SAST Scan
-        runs-on: ubuntu-latest
-        concurrency:
-            group: checkmarx-${{ github.head_ref || github.ref }}
-            cancel-in-progress: true
-        timeout-minutes: 90
-        if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+  call-reusable-checkmarx:
+    name: Call Reusable Checkmarx Workflow
+    uses: Replicon/time-intelligence-web/.github/workflows/reusable-checkmarx.yml@main
+    with:
+      timeout_minutes: 90
+      scheduled_timeout_minutes: 360
+    secrets:
+      checkmarx_username: ${{ secrets.CHECKMARX_USERNAME }}
+      checkmarx_password: ${{ secrets.CHECKMARX_PASSWORD }}
+      checkmarx_client_secret: ${{ secrets.CHECKMARX_CLIENT_SECRET }}
 
-        steps:
-          - name: Checkout Code
-            uses: actions/checkout@v4
-
-          - name: Run Checkmarx SAST Scan
-            uses: checkmarx-ts/checkmarx-cxflow-github-action@v2.3
-            with:
-              # Connection parameters
-              checkmarx_url: https://cmxext.deltek.com
-              checkmarx_username: ${{ secrets.CHECKMARX_USERNAME }}
-              checkmarx_password: ${{ secrets.CHECKMARX_PASSWORD }}
-              checkmarx_client_secret: ${{ secrets.CHECKMARX_CLIENT_SECRET }}
-              team: "/CxServer/Security/Deltek/Replicon"
-              preset: "ASA Premium"
-
-              # Project configuration
-              project: Replicon-${{ github.event.repository.name }}
-              scanners: sast
-              incremental: true
-              break_build: false
-
-              # Scan parameters and thresholds
-              params: >-
-                --namespace=${{ github.repository_owner}}
-                --checkmarx.settings-override=true
-                --repo-name=${{ github.event.repository.name}}
-                --branch=${{ github.ref_name || github.head_ref}}
-                --cx-flow.filterSeverity
-                --cx-flow.thresholds.high=1
-                --cx-flow.thresholds.medium=1
-                --cx-flow.scan-resubmit=true
-                ${{ github.event.number && format('--merge-id={0}', github.event.number)}}
-
-  checkmarx-scheduled-scan:
-        name: Checkmarx scheduled SAST Scan
-        runs-on: ubuntu-latest
-        concurrency:
-            group: checkmarx-scheduled-scan
-            cancel-in-progress: true
-        timeout-minutes: 360
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-
-        steps:
-          - name: Checkout Code
-            uses: actions/checkout@v4
-            with:
-              ref: ${{ github.event.repository.default_branch }}
-
-          - name: Run Checkmarx SAST Scan
-            uses: checkmarx-ts/checkmarx-cxflow-github-action@v2.3
-            with:
-              # Connection parameters
-              checkmarx_url: https://cmxext.deltek.com
-              checkmarx_username: ${{ secrets.CHECKMARX_USERNAME }}
-              checkmarx_password: ${{ secrets.CHECKMARX_PASSWORD }}
-              checkmarx_client_secret: ${{ secrets.CHECKMARX_CLIENT_SECRET }}
-              team: "/CxServer/Security/Deltek/Replicon"
-              preset: "ASA Premium"
-
-              # Project configuration
-              project: Replicon-${{ github.event.repository.name }}
-              scanners: sast
-              incremental: false
-              break_build: false
-
-              # Scan parameters and thresholds
-              params: >-
-                --namespace=${{ github.repository_owner}}
-                --checkmarx.settings-override=true
-                --repo-name=${{ github.event.repository.name}}
-                --branch=${{ github.event.repository.default_branch }}
-                --cx-flow.filterSeverity
-                --cx-flow.thresholds.high=1
-                --cx-flow.thresholds.medium=1
-                --cx-flow.scan-resubmit=true
- 
